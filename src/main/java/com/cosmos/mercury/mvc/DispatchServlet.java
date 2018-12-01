@@ -1,9 +1,8 @@
 package com.cosmos.mercury.mvc;
 
-import com.cosmos.mercury.mvc.annotation.Controller;
-import com.cosmos.mercury.mvc.annotation.Qualifier;
-import com.cosmos.mercury.mvc.annotation.RequestMapping;
-import com.cosmos.mercury.mvc.annotation.Service;
+import com.cosmos.mercury.mvc.annotation.*;
+import com.cosmos.mercury.mvc.common.RequestMethod;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
@@ -16,6 +15,7 @@ import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
 import java.net.URL;
 import java.util.*;
 
@@ -48,6 +48,17 @@ public class DispatchServlet extends HttpServlet {
      */
     private Map<String, Object> handlerMapping = new HashMap<>();
 
+    /**
+     * 请求方式绑定映射
+     */
+    private Map<String,Object> httpMethodMapping = new HashMap<>();
+
+    /**
+     * 存放controller和url映射的mapping
+     */
+    private Map<String, Object> urlController = new HashMap<>();
+
+
     private final static String classPathPrefix="classpath:";
 
     private static String toLowerFirstWorld(String key) {
@@ -69,40 +80,68 @@ public class DispatchServlet extends HttpServlet {
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        String uri=req.getRequestURI();
-        String url=replaceUrl(uri);
-        Object o=handlerMapping.get(url);
-        if(o == null){
-            resp.getWriter().write("No mapping!");
-        }
-        Enumeration<String> parameterNames=req.getParameterNames();
-
+        invokeMethod(req,resp,RequestMethod.GET);
 
     }
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        invokeMethod(req,resp,RequestMethod.POST);
+    }
+
+    private void invokeMethod(HttpServletRequest req, HttpServletResponse resp, RequestMethod requestMethod) throws IOException {
         String uri=req.getRequestURI();
         String url=replaceUrl(uri);
         Object methodMapping=handlerMapping.get(url);
         if(methodMapping == null){
-            resp.getWriter().write("No mapping!");
+            System.out.println("DispatchServlet cant find mapping url :"+url);
+            resp.getWriter().println("No mapping!");
+            return;
+        }
+        RequestMethod[] requestMethods=(RequestMethod[])httpMethodMapping.get(url);
+        if(requestMethods!=null&&requestMethods.length>0){
+            boolean m=false;
+            for (RequestMethod reqm:requestMethods){
+                if(requestMethod.equals(reqm)){
+                    m=true;
+                }
+            }
+            if(!m){
+                System.out.println("DispatchServlet method not allowed "+requestMethod);
+                resp.getWriter().println("method not allowed!");
+                return;
+            }
         }
         Method method=(Method)methodMapping;
-        Object controller=controllerIoc.get(url);
+        Object controller=urlController.get(url);
         try {
             method.setAccessible(true);
-            method.invoke(controller,null);
+            Parameter[] params = method.getParameters();
+            Object [] requestParams=new Object[params.length];
+            for(int i=0;i<params.length;i++){
+                if(HttpServletRequest.class.equals(params[i].getType())){
+                    requestParams[i]=req;
+                }else if(HttpServletResponse.class.equals(params[i].getType())){
+                    requestParams[i]=resp;
+                }else{
+                    requestParams[i]=null;
+                }
+            }
+            Object returnObject=method.invoke(controller,requestParams);
+            if(method.isAnnotationPresent(ResponseBody.class)){
+                resp.setContentType("application/json;charset=utf-8");
+                ObjectMapper objectMapper=new ObjectMapper();
+                String json = objectMapper.writeValueAsString(returnObject);
+                resp.getWriter().println(json);
+            }else{
+                resp.getWriter().println(returnObject.toString());
+            }
         } catch (IllegalAccessException e) {
             e.printStackTrace();
         } catch (InvocationTargetException e) {
             e.printStackTrace();
         }
-        InputStream in=req.getInputStream();
-
-
     }
-
     /**
      * 加载配置文件
      *
@@ -161,7 +200,7 @@ public class DispatchServlet extends HttpServlet {
                     Service service = clazz.getAnnotation(Service.class);
                     String key = service.value();
                     if (!"".equals(key.trim())) {
-                        serviceIoc.put("key", clazz.newInstance());
+                        serviceIoc.put(key, clazz.newInstance());
                     } else {
                         serviceIoc.put(toLowerFirstWorld(clazz.getSimpleName()), clazz.newInstance());
                     }
@@ -205,12 +244,14 @@ public class DispatchServlet extends HttpServlet {
                 RequestMapping annotation = method.getAnnotation(RequestMapping.class);
                 String methodUrl = annotation.value();
                 String url = fixUrl(baseUrl, methodUrl);
+                RequestMethod[] requestMethods=annotation.method();
+                httpMethodMapping.put(url,requestMethods);
                 handlerMapping.put(url, method);
                 urlMethod.put(url, o);
                 System.out.println(url + "," + method);
             }
         }
-        controllerIoc.putAll(urlMethod);
+        urlController.putAll(urlMethod);
     }
 
     private String fixUrl(String baseUrl, String methodUrl) {
@@ -241,7 +282,6 @@ public class DispatchServlet extends HttpServlet {
                     }else{
                         key=field.getName();
                     }
-
                     try {
                         field.set(o,serviceIoc.get(key));
                     } catch (IllegalAccessException e) {

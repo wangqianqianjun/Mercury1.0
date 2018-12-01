@@ -1,5 +1,7 @@
 package com.cosmos.mercury.mvc.annotation;
 
+import com.cosmos.mercury.mvc.common.RequestMethod;
+
 import java.lang.annotation.*;
 
 /**
@@ -15,4 +17,10 @@ public @interface RequestMapping {
      * @return
      */
     String value() default "";
+
+    /**
+     * 请求方式
+     * @return
+     */
+    RequestMethod[] method() default {};
 }
